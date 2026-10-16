@@ -14,6 +14,15 @@ export interface OrderItem {
   totalPrice: number;
 }
 
+export interface RefundRecord {
+  id: string;
+  amount: number;
+  reason: string;
+  notes?: string;
+  processedBy: string;
+  processedAt: Date;
+}
+
 export class Order {
   id: string;
   customerId: string;
@@ -21,6 +30,7 @@ export class Order {
   items: OrderItem[];
   totalAmount: number;
   refundedAmount?: number;
+  refunds?: RefundRecord[];
   currency: string;
   status: OrderStatus;
   paymentReference?: string;

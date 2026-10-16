@@ -96,6 +96,19 @@ export class OrdersService {
       order.status = OrderStatus.REFUNDED;
     }
 
+    // Record audit entry preserving reason, notes, timestamp and operator
+    if (!order.refunds) {
+      order.refunds = [];
+    }
+    order.refunds.push({
+      id: `ref_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      amount: refundDto.amount,
+      reason: refundDto.reason,
+      notes: refundDto.notes,
+      processedBy: user.userId || user.sub || user.email || 'system',
+      processedAt: new Date(),
+    });
+
     order.updatedAt = new Date();
     this.orders.set(order.id, order);
 

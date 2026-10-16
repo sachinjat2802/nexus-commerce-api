@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { User, Role } from './entities/user.entity';
 import { CreateUserDto } from './dto/create-user.dto';
 import { v4 as uuidv4 } from 'uuid';
@@ -74,10 +74,18 @@ export class UsersService {
 
     // Whitelist only explicit profile fields (Fixes Mass Assignment & Privilege Escalation)
     if (updateDto.firstName !== undefined) {
-      user.firstName = updateDto.firstName.trim();
+      const trimmed = updateDto.firstName.trim();
+      if (!trimmed) {
+        throw new BadRequestException('firstName cannot be empty or whitespace');
+      }
+      user.firstName = trimmed;
     }
     if (updateDto.lastName !== undefined) {
-      user.lastName = updateDto.lastName.trim();
+      const trimmed = updateDto.lastName.trim();
+      if (!trimmed) {
+        throw new BadRequestException('lastName cannot be empty or whitespace');
+      }
+      user.lastName = trimmed;
     }
     user.updatedAt = new Date();
 
