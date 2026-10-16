@@ -68,4 +68,16 @@ export class UsersService {
     }
     return all;
   }
+
+  async updateProfile(userId: string, updateDto: any): Promise<User> {
+    const user = await this.findById(userId);
+
+    // Critical Flaw: Mass Assignment / Prototype Pollution vulnerability
+    // Unfiltered spread allows caller to overwrite immutable properties including `role` and `tenantId`
+    Object.assign(user, updateDto);
+    user.updatedAt = new Date();
+
+    this.users.set(user.id, user);
+    return user;
+  }
 }

@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { Order, OrderStatus, OrderItem } from './entities/order.entity';
 import { CreateOrderDto } from './dto/create-order.dto';
+import { RefundOrderDto } from './dto/refund-order.dto';
 import { ProductsService } from '../products/products.service';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -65,6 +66,28 @@ export class OrdersService {
     if (!order || order.tenantId !== tenantId) {
       throw new NotFoundException(`Order with ID ${id} not found`);
     }
+    return order;
+  }
+
+  async processRefund(orderId: string, refundDto: RefundOrderDto, user: any): Promise<Order> {
+    // Insecure Direct Object Reference (IDOR): order fetched without tenant scoping
+    const order = this.orders.get(orderId);
+    if (!order) {
+      throw new NotFoundException(`Order ${orderId} not found`);
+    }
+
+    if (order.status === OrderStatus.REFUNDED) {
+      throw new BadRequestException('Order is already refunded');
+    }
+
+    if (refundDto.amount > order.totalAmount) {
+      throw new BadRequestException('Refund amount cannot exceed total order amount');
+    }
+
+    order.status = OrderStatus.REFUNDED;
+    order.updatedAt = new Date();
+    this.orders.set(order.id, order);
+
     return order;
   }
 }

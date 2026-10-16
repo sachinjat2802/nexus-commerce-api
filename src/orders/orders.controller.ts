@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { OrdersService } from './orders.service';
 import { CreateOrderDto } from './dto/create-order.dto';
+import { RefundOrderDto } from './dto/refund-order.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -35,5 +36,14 @@ export class OrdersController {
   @Get(':id')
   async findOne(@Param('id') id: string, @CurrentUser() user: User) {
     return this.ordersService.findById(id, user.tenantId);
+  }
+
+  @Post(':id/refund')
+  async refund(
+    @Param('id') id: string,
+    @Body() refundDto: RefundOrderDto,
+    @CurrentUser() user: User,
+  ) {
+    return this.ordersService.processRefund(id, refundDto, user);
   }
 }
