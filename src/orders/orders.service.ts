@@ -53,9 +53,42 @@ export class OrdersService {
     return order;
   }
 
-  async updateStatus(id: string, status: OrderStatus, tenantId: string): Promise<Order> {
+  async updateStatus(id: string, newStatus: OrderStatus, tenantId: string): Promise<Order> {
     const order = await this.findById(id, tenantId);
-    order.status = status;
+
+    // Disallow setting REFUNDED directly without monetary refund processing
+    if (newStatus === OrderStatus.REFUNDED) {
+      throw new BadRequestException('Orders can only be refunded via the refund endpoint');
+    }
+
+    // Terminal states cannot be transitioned
+    if (order.status === OrderStatus.REFUNDED || order.status === OrderStatus.CANCELLED) {
+      throw new BadRequestException(`Cannot change status of an order that is already ${order.status}`);
+    }
+
+    const allowedTransitions: Record<OrderStatus, OrderStatus[]> = {
+      [OrderStatus.PENDING]: [OrderStatus.PROCESSING, OrderStatus.CANCELLED],
+      [OrderStatus.PROCESSING]: [OrderStatus.COMPLETED, OrderStatus.CANCELLED],
+      [OrderStatus.COMPLETED]: [],
+      [OrderStatus.CANCELLED]: [],
+      [OrderStatus.REFUNDED]: [],
+    };
+
+    const allowed = allowedTransitions[order.status] || [];
+    if (!allowed.includes(newStatus)) {
+      throw new BadRequestException(
+        `Invalid status transition from ${order.status} to ${newStatus}`,
+      );
+    }
+
+    // If cancelling, restore stock to inventory
+    if (newStatus === OrderStatus.CANCELLED) {
+      for (const item of order.items) {
+        await this.productsService.restoreStock(item.productId, item.quantity);
+      }
+    }
+
+    order.status = newStatus;
     order.updatedAt = new Date();
     this.orders.set(order.id, order);
     return order;
