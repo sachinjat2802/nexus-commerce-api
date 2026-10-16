@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { Product } from './entities/product.entity';
 import { CreateProductDto } from './dto/create-product.dto';
 import { v4 as uuidv4 } from 'uuid';
@@ -82,11 +82,59 @@ export class ProductsService {
 
     product.stock -= quantity;
     product.updatedAt = new Date();
-    if (product.stock === 0) {
+    if (product.stock === 0 && product.isAvailable) {
       product.isAvailable = false;
+      product.autoDisabledDueToStockOut = true;
     }
 
     this.products.set(product.id, product);
     return product;
+  }
+
+  async reserveStock(productId: string, quantity: number, tenantId: string): Promise<boolean> {
+    if (quantity <= 0) {
+      throw new BadRequestException('Reservation quantity must be greater than zero');
+    }
+    const product = await this.findById(productId, tenantId);
+
+    // Atomic synchronous check and decrement (Prevents concurrency overselling)
+    if (product.stock >= quantity) {
+      product.stock -= quantity;
+      product.reservedStock = (product.reservedStock || 0) + quantity;
+      if (product.stock === 0 && product.isAvailable) {
+        product.isAvailable = false; // Mark unavailable when stock reaches 0
+        product.autoDisabledDueToStockOut = true;
+      }
+      product.updatedAt = new Date();
+      this.products.set(product.id, product);
+      return true;
+    }
+
+    return false;
+  }
+
+  async releaseStock(productId: string, quantity: number, tenantId: string): Promise<void> {
+    if (quantity <= 0) {
+      throw new BadRequestException('Release quantity must be greater than zero');
+    }
+    const product = await this.findById(productId, tenantId);
+    const currentlyReserved = product.reservedStock || 0;
+    if (quantity > currentlyReserved) {
+      throw new BadRequestException(
+        `Cannot release ${quantity} units: exceeds currently reserved stock of ${currentlyReserved}`,
+      );
+    }
+
+    product.reservedStock = currentlyReserved - quantity;
+    product.stock += quantity;
+
+    // Only restore availability if previously auto-disabled strictly due to a 0-stock condition,
+    // preserving deliberate admin unlisting
+    if (product.stock > 0 && product.autoDisabledDueToStockOut) {
+      product.isAvailable = true;
+      product.autoDisabledDueToStockOut = false;
+    }
+    product.updatedAt = new Date();
+    this.products.set(product.id, product);
   }
 }

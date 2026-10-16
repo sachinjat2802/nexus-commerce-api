@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { Order, OrderStatus, OrderItem } from './entities/order.entity';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { ProductsService } from '../products/products.service';
@@ -66,5 +66,133 @@ export class OrdersService {
       throw new NotFoundException(`Order with ID ${id} not found`);
     }
     return order;
+  }
+
+  // Store of reservations by tenant: tenantId -> Map<reservationId, Reservation>
+  private reservations: Map<string, Map<string, {
+    id: string;
+    customerId: string;
+    tenantId: string;
+    items: { productId: string; quantity: number }[];
+    expiresAt: Date;
+    status: 'ACTIVE' | 'RELEASED' | 'CONFIRMED';
+  }>> = new Map();
+
+  // Active reservation IDs indexed by tenant: tenantId -> Set<reservationId>
+  // This guarantees cleanupExpiredReservations runs in O(active holds), skipping released records
+  private activeReservationIdsByTenant: Map<string, Set<string>> = new Map();
+
+  async cleanupExpiredReservations(tenantId: string): Promise<number> {
+    const activeIds = this.activeReservationIdsByTenant.get(tenantId);
+    if (!activeIds || activeIds.size === 0) {
+      return 0;
+    }
+
+    const tenantReservations = this.reservations.get(tenantId);
+    if (!tenantReservations) {
+      return 0;
+    }
+
+    const now = new Date();
+    let cleaned = 0;
+    const expiredIds: string[] = [];
+
+    // Only inspect active reservations for the calling tenant in O(active holds)
+    for (const id of activeIds) {
+      const res = tenantReservations.get(id);
+      if (res && res.expiresAt < now) {
+        expiredIds.push(id);
+      }
+    }
+
+    for (const id of expiredIds) {
+      const res = tenantReservations.get(id);
+      if (res && res.status === 'ACTIVE') {
+        res.status = 'RELEASED';
+        activeIds.delete(id); // Remove from active set so it is never scanned again
+        for (const item of res.items) {
+          await this.productsService.releaseStock(item.productId, item.quantity, tenantId);
+        }
+        cleaned++;
+      }
+    }
+
+    return cleaned;
+  }
+
+  async createBatchReservation(
+    batchItems: { productId: string; quantity: number }[],
+    customerId: string,
+    tenantId: string,
+  ): Promise<{ success: boolean; message: string; reservedCount: number; reservationId: string }> {
+    // 1. Evict only expired active stock holds for this tenant in O(active holds)
+    await this.cleanupExpiredReservations(tenantId);
+
+    const successfullyReserved: { productId: string; quantity: number }[] = [];
+
+    // 2. Sequential for..of loop that strictly awaits each reservation
+    // and provides automatic rollback if any stock reservation fails
+    for (const item of batchItems) {
+      const reserved = await this.productsService.reserveStock(item.productId, item.quantity, tenantId);
+      if (reserved) {
+        successfullyReserved.push(item);
+      } else {
+        // Rollback all previously reserved items in this batch
+        for (const rollbackItem of successfullyReserved) {
+          await this.productsService.releaseStock(rollbackItem.productId, rollbackItem.quantity, tenantId);
+        }
+        throw new BadRequestException(
+          `Failed to reserve stock for product ${item.productId}. Batch reservation aborted and rolled back.`,
+        );
+      }
+    }
+
+    // 3. Store temporary hold record and index active hold ID with 15-minute TTL
+    const reservationId = `res_${uuidv4().substring(0, 8)}`;
+    if (!this.reservations.has(tenantId)) {
+      this.reservations.set(tenantId, new Map());
+    }
+    if (!this.activeReservationIdsByTenant.has(tenantId)) {
+      this.activeReservationIdsByTenant.set(tenantId, new Set());
+    }
+
+    this.reservations.get(tenantId)!.set(reservationId, {
+      id: reservationId,
+      customerId,
+      tenantId,
+      items: batchItems,
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000), // 15-minute hold
+      status: 'ACTIVE',
+    });
+    this.activeReservationIdsByTenant.get(tenantId)!.add(reservationId);
+
+    return {
+      success: true,
+      message: 'Batch stock reservation completed successfully with 15-minute hold',
+      reservedCount: successfullyReserved.length,
+      reservationId,
+    };
+  }
+
+  async releaseReservation(reservationId: string, tenantId: string): Promise<boolean> {
+    const tenantReservations = this.reservations.get(tenantId);
+    const reservation = tenantReservations?.get(reservationId);
+    if (!reservation) {
+      throw new NotFoundException(`Reservation ${reservationId} not found`);
+    }
+
+    if (reservation.status !== 'ACTIVE') {
+      throw new ConflictException(`Reservation ${reservationId} is already ${reservation.status.toLowerCase()}`);
+    }
+
+    // Mark RELEASED and remove from active IDs so cleanup never scans it
+    reservation.status = 'RELEASED';
+    this.activeReservationIdsByTenant.get(tenantId)?.delete(reservationId);
+
+    for (const item of reservation.items) {
+      await this.productsService.releaseStock(item.productId, item.quantity, tenantId);
+    }
+
+    return true;
   }
 }

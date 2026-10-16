@@ -2,14 +2,17 @@ import {
   Controller,
   Get,
   Post,
+  Delete,
   Body,
   Param,
   UseGuards,
 } from '@nestjs/common';
 import { OrdersService } from './orders.service';
 import { CreateOrderDto } from './dto/create-order.dto';
+import { BatchReserveDto } from './dto/batch-reserve.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
+import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { User, Role } from '../users/entities/user.entity';
 
@@ -35,5 +38,23 @@ export class OrdersController {
   @Get(':id')
   async findOne(@Param('id') id: string, @CurrentUser() user: User) {
     return this.ordersService.findById(id, user.tenantId);
+  }
+
+  @Post('batch-reserve')
+  @Roles(Role.ADMIN, Role.MERCHANT)
+  async batchReserve(
+    @Body() batchDto: BatchReserveDto,
+    @CurrentUser() user: User,
+  ) {
+    return this.ordersService.createBatchReservation(batchDto.items, user.id, user.tenantId);
+  }
+
+  @Delete('reservations/:id')
+  @Roles(Role.ADMIN, Role.MERCHANT)
+  async releaseReservation(
+    @Param('id') reservationId: string,
+    @CurrentUser() user: User,
+  ) {
+    return this.ordersService.releaseReservation(reservationId, user.tenantId);
   }
 }
