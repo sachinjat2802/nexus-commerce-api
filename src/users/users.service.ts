@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { User, Role } from './entities/user.entity';
 import { CreateUserDto } from './dto/create-user.dto';
 import { v4 as uuidv4 } from 'uuid';
@@ -67,5 +67,32 @@ export class UsersService {
       return all.filter((u) => u.tenantId === tenantId);
     }
     return all;
+  }
+
+  async updateProfile(userId: string, updateDto: { firstName?: string; lastName?: string }): Promise<Omit<User, 'passwordHash'>> {
+    const user = await this.findById(userId);
+
+    // Whitelist only explicit profile fields (Fixes Mass Assignment & Privilege Escalation)
+    if (updateDto.firstName !== undefined) {
+      const trimmed = updateDto.firstName.trim();
+      if (!trimmed) {
+        throw new BadRequestException('firstName cannot be empty or whitespace');
+      }
+      user.firstName = trimmed;
+    }
+    if (updateDto.lastName !== undefined) {
+      const trimmed = updateDto.lastName.trim();
+      if (!trimmed) {
+        throw new BadRequestException('lastName cannot be empty or whitespace');
+      }
+      user.lastName = trimmed;
+    }
+    user.updatedAt = new Date();
+
+    this.users.set(user.id, user);
+
+    // Omit sensitive credentials from API response (Fixes passwordHash exposure)
+    const { passwordHash, ...safeUser } = user;
+    return safeUser;
   }
 }

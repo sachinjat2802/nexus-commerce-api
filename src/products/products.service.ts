@@ -89,4 +89,18 @@ export class ProductsService {
     this.products.set(product.id, product);
     return product;
   }
+
+  async restoreStock(productId: string, quantity: number): Promise<Product> {
+    const product = this.products.get(productId);
+    if (!product) {
+      throw new NotFoundException(`Product ${productId} not found`);
+    }
+    product.stock += quantity;
+    if (product.stock > 0) {
+      product.isAvailable = true;
+    }
+    product.updatedAt = new Date();
+    this.products.set(product.id, product);
+    return product;
+  }
 }

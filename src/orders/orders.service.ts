@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { Order, OrderStatus, OrderItem } from './entities/order.entity';
 import { CreateOrderDto } from './dto/create-order.dto';
+import { RefundOrderDto } from './dto/refund-order.dto';
 import { ProductsService } from '../products/products.service';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -41,13 +42,54 @@ export class OrdersService {
       items: orderItems,
       totalAmount,
       currency: 'USD',
-      status: OrderStatus.PENDING,
+      status: OrderStatus.PROCESSING, // Order is paid and in fulfillment processing
       paymentReference: `pay_ref_${uuidv4().substring(0, 8)}`,
       shippingAddress: createOrderDto.shippingAddress,
       createdAt: new Date(),
       updatedAt: new Date(),
     };
 
+    this.orders.set(order.id, order);
+    return order;
+  }
+
+  async updateStatus(id: string, newStatus: OrderStatus, tenantId: string): Promise<Order> {
+    const order = await this.findById(id, tenantId);
+
+    // Disallow setting REFUNDED directly without monetary refund processing
+    if (newStatus === OrderStatus.REFUNDED) {
+      throw new BadRequestException('Orders can only be refunded via the refund endpoint');
+    }
+
+    // Terminal states cannot be transitioned
+    if (order.status === OrderStatus.REFUNDED || order.status === OrderStatus.CANCELLED) {
+      throw new BadRequestException(`Cannot change status of an order that is already ${order.status}`);
+    }
+
+    const allowedTransitions: Record<OrderStatus, OrderStatus[]> = {
+      [OrderStatus.PENDING]: [OrderStatus.PROCESSING, OrderStatus.CANCELLED],
+      [OrderStatus.PROCESSING]: [OrderStatus.COMPLETED, OrderStatus.CANCELLED],
+      [OrderStatus.COMPLETED]: [OrderStatus.CANCELLED],
+      [OrderStatus.CANCELLED]: [],
+      [OrderStatus.REFUNDED]: [],
+    };
+
+    const allowed = allowedTransitions[order.status] || [];
+    if (!allowed.includes(newStatus)) {
+      throw new BadRequestException(
+        `Invalid status transition from ${order.status} to ${newStatus}`,
+      );
+    }
+
+    // If cancelling, restore stock to inventory
+    if (newStatus === OrderStatus.CANCELLED) {
+      for (const item of order.items) {
+        await this.productsService.restoreStock(item.productId, item.quantity);
+      }
+    }
+
+    order.status = newStatus;
+    order.updatedAt = new Date();
     this.orders.set(order.id, order);
     return order;
   }
@@ -66,5 +108,69 @@ export class OrdersService {
       throw new NotFoundException(`Order with ID ${id} not found`);
     }
     return order;
+  }
+
+  async processRefund(orderId: string, refundDto: RefundOrderDto, user: any): Promise<Order> {
+    // 1. Enforce tenant isolation via scoped findById (Fixes IDOR)
+    const order = await this.findById(orderId, user.tenantId);
+
+    // 2. Validate order status lifecycle (Fixes refunding unpaid or cancelled orders)
+    if (order.status !== OrderStatus.COMPLETED && order.status !== OrderStatus.PROCESSING) {
+      throw new BadRequestException('Only completed or processing orders can be refunded');
+    }
+
+    // 3. Compute in integer cents and validate max 2 decimals to avoid float precision drift
+    const totalCents = Math.round(order.totalAmount * 100);
+    const currentRefundedCents = Math.round((order.refundedAmount || 0) * 100);
+    const refundCents = Math.round(refundDto.amount * 100);
+
+    if (refundCents <= 0) {
+      throw new BadRequestException('Refund amount must be greater than zero');
+    }
+
+    if (Math.abs(refundDto.amount * 100 - refundCents) > 1e-4) {
+      throw new BadRequestException('Refund amount cannot have more than 2 decimal places');
+    }
+
+    // 4. Track cumulative refunded amount in integer cents (Fixes float cents breaking refund cap)
+    if (currentRefundedCents + refundCents > totalCents) {
+      const remainingCents = totalCents - currentRefundedCents;
+      throw new BadRequestException(
+        `Refund amount exceeds remaining refundable balance of ${(remainingCents / 100).toFixed(2)}`,
+      );
+    }
+
+    const newRefundedCents = currentRefundedCents + refundCents;
+    order.refundedAmount = Number((newRefundedCents / 100).toFixed(2));
+    if (newRefundedCents >= totalCents) {
+      order.status = OrderStatus.REFUNDED;
+    }
+
+    // Record audit entry preserving reason, notes, timestamp and operator id (Fixes using user.id)
+    if (!order.refunds) {
+      order.refunds = [];
+    }
+    order.refunds.push({
+      id: `ref_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      amount: Number((refundCents / 100).toFixed(2)),
+      reason: refundDto.reason,
+      notes: refundDto.notes,
+      processedBy: user.id || 'system',
+      processedAt: new Date(),
+    });
+
+    order.updatedAt = new Date();
+    this.orders.set(order.id, order);
+
+    return order;
+  }
+
+  sanitizeForUser(order: Order, user: any): Order {
+    if (user?.role === 'ADMIN') {
+      return order;
+    }
+    // Customers only see order state; strip internal staff audit notes and staff identity
+    const { refunds, ...safeOrder } = order;
+    return safeOrder as Order;
   }
 }
