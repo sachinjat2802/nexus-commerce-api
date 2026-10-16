@@ -10,8 +10,8 @@ import { Product } from '../products/entities/product.entity';
 export class AnalyticsService {
   private readonly logger = new Logger(AnalyticsService.name);
 
-  // Fix (ReDoS): Unambiguous linear regex where & is strictly required between key-value pairs
-  private readonly FILTER_REGEX = /^[a-zA-Z0-9_]+(=[a-zA-Z0-9_]+)?(&[a-zA-Z0-9_]+(=[a-zA-Z0-9_]+)?)*$/;
+  // Fix (ReDoS & Hyphens): Unambiguous linear regex supporting alphanumeric, underscores, and hyphens in values
+  private readonly FILTER_REGEX = /^[a-zA-Z0-9_]+(=[a-zA-Z0-9_\-]+)?(&[a-zA-Z0-9_]+(=[a-zA-Z0-9_\-]+)?)*$/;
 
   constructor(
     private readonly ordersService: OrdersService,
@@ -28,9 +28,22 @@ export class AnalyticsService {
 
     const result: Record<string, string> = {};
     const pairs = filterQuery.split('&');
+    const allowedKeys = ['status', 'customerId'];
+
     for (const pair of pairs) {
       const [key, value] = pair.split('=');
-      result[key] = value || '';
+      if (!allowedKeys.includes(key)) {
+        throw new BadRequestException(`Unsupported filter key: ${key}. Supported keys: ${allowedKeys.join(', ')}`);
+      }
+      if (key === 'status') {
+        const uppercaseStatus = (value || '').toUpperCase();
+        if (!Object.values(OrderStatus).includes(uppercaseStatus as OrderStatus)) {
+          throw new BadRequestException(`Invalid order status filter: ${value}`);
+        }
+        result[key] = uppercaseStatus;
+      } else {
+        result[key] = value || '';
+      }
     }
     return result;
   }
