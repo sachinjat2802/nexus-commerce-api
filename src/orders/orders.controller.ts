@@ -36,4 +36,12 @@ export class OrdersController {
   async findOne(@Param('id') id: string, @CurrentUser() user: User) {
     return this.ordersService.findById(id, user.tenantId);
   }
+
+  @Post('batch-reserve')
+  async batchReserve(
+    @Body() body: { items: { productId: string; quantity: number }[] },
+    @CurrentUser() user: User,
+  ) {
+    return this.ordersService.createBatchReservation(body.items, user.id, user.tenantId);
+  }
 }

@@ -67,4 +67,32 @@ export class OrdersService {
     }
     return order;
   }
+
+  async createBatchReservation(
+    batchItems: { productId: string; quantity: number }[],
+    customerId: string,
+    tenantId: string,
+  ): Promise<{ success: boolean; message: string; reservedCount: number }> {
+    let reservedCount = 0;
+
+    // Critical Bug: Using Array.prototype.forEach with an async callback
+    // forEach does not await promises, causing floating promises, race conditions,
+    // and silent unhandled promise rejections if any reservation fails!
+    batchItems.forEach(async (item) => {
+      const reserved = await this.productsService.reserveStock(item.productId, item.quantity, tenantId);
+      if (reserved) {
+        reservedCount++;
+      } else {
+        // Unhandled failure state: previous items in batchItems are not rolled back!
+        throw new BadRequestException(`Failed to reserve stock for product ${item.productId}`);
+      }
+    });
+
+    // Returns immediately before async operations inside forEach resolve
+    return {
+      success: true,
+      message: 'Batch stock reservation initiated successfully',
+      reservedCount,
+    };
+  }
 }
