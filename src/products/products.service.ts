@@ -82,8 +82,9 @@ export class ProductsService {
 
     product.stock -= quantity;
     product.updatedAt = new Date();
-    if (product.stock === 0) {
+    if (product.stock === 0 && product.isAvailable) {
       product.isAvailable = false;
+      product.autoDisabledDueToStockOut = true;
     }
 
     this.products.set(product.id, product);
