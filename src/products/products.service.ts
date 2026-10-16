@@ -110,7 +110,8 @@ export class ProductsService {
   async releaseStock(productId: string, quantity: number, tenantId: string): Promise<void> {
     const product = await this.findById(productId, tenantId);
     product.stock += quantity;
-    if (product.stock > 0) {
+    // Only restore availability if previously disabled due to 0 stock
+    if (product.stock > 0 && !product.isAvailable) {
       product.isAvailable = true;
     }
     product.updatedAt = new Date();

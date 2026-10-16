@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Delete,
   Body,
   Param,
   UseGuards,
@@ -39,10 +40,20 @@ export class OrdersController {
   }
 
   @Post('batch-reserve')
+  @Roles(Role.ADMIN, Role.MERCHANT)
   async batchReserve(
     @Body() batchDto: BatchReserveDto,
     @CurrentUser() user: User,
   ) {
     return this.ordersService.createBatchReservation(batchDto.items, user.id, user.tenantId);
+  }
+
+  @Delete('reservations/:id')
+  @Roles(Role.ADMIN, Role.MERCHANT)
+  async releaseReservation(
+    @Param('id') reservationId: string,
+    @CurrentUser() user: User,
+  ) {
+    return this.ordersService.releaseReservation(reservationId, user.tenantId);
   }
 }

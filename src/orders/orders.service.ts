@@ -119,4 +119,20 @@ export class OrdersService {
       reservationId,
     };
   }
+
+  async releaseReservation(reservationId: string, tenantId: string): Promise<boolean> {
+    const reservation = this.reservations.get(reservationId);
+    if (!reservation || reservation.tenantId !== tenantId || reservation.status !== 'ACTIVE') {
+      return false;
+    }
+
+    // Release and restore reserved stock
+    for (const item of reservation.items) {
+      await this.productsService.releaseStock(item.productId, item.quantity, tenantId);
+    }
+
+    reservation.status = 'RELEASED';
+    this.reservations.set(reservationId, reservation);
+    return true;
+  }
 }
