@@ -42,7 +42,7 @@ export class OrdersService {
       items: orderItems,
       totalAmount,
       currency: 'USD',
-      status: OrderStatus.COMPLETED, // Mark completed upon payment confirmation and stock allocation
+      status: OrderStatus.PROCESSING, // Order is paid and in fulfillment processing
       paymentReference: `pay_ref_${uuidv4().substring(0, 8)}`,
       shippingAddress: createOrderDto.shippingAddress,
       createdAt: new Date(),
@@ -69,7 +69,7 @@ export class OrdersService {
     const allowedTransitions: Record<OrderStatus, OrderStatus[]> = {
       [OrderStatus.PENDING]: [OrderStatus.PROCESSING, OrderStatus.CANCELLED],
       [OrderStatus.PROCESSING]: [OrderStatus.COMPLETED, OrderStatus.CANCELLED],
-      [OrderStatus.COMPLETED]: [],
+      [OrderStatus.COMPLETED]: [OrderStatus.CANCELLED],
       [OrderStatus.CANCELLED]: [],
       [OrderStatus.REFUNDED]: [],
     };
