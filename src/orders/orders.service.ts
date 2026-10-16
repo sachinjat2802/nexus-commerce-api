@@ -68,31 +68,55 @@ export class OrdersService {
     return order;
   }
 
+  private reservations: Map<string, {
+    id: string;
+    customerId: string;
+    tenantId: string;
+    items: { productId: string; quantity: number }[];
+    expiresAt: Date;
+    status: 'ACTIVE' | 'RELEASED' | 'CONFIRMED';
+  }> = new Map();
+
   async createBatchReservation(
     batchItems: { productId: string; quantity: number }[],
     customerId: string,
     tenantId: string,
-  ): Promise<{ success: boolean; message: string; reservedCount: number }> {
-    let reservedCount = 0;
+  ): Promise<{ success: boolean; message: string; reservedCount: number; reservationId: string }> {
+    const successfullyReserved: { productId: string; quantity: number }[] = [];
 
-    // Critical Bug: Using Array.prototype.forEach with an async callback
-    // forEach does not await promises, causing floating promises, race conditions,
-    // and silent unhandled promise rejections if any reservation fails!
-    batchItems.forEach(async (item) => {
+    // Fix: Sequential for..of loop that strictly awaits each reservation
+    // and provides automatic rollback if any stock reservation fails
+    for (const item of batchItems) {
       const reserved = await this.productsService.reserveStock(item.productId, item.quantity, tenantId);
       if (reserved) {
-        reservedCount++;
+        successfullyReserved.push(item);
       } else {
-        // Unhandled failure state: previous items in batchItems are not rolled back!
-        throw new BadRequestException(`Failed to reserve stock for product ${item.productId}`);
+        // Rollback all previously reserved items in this batch
+        for (const rollbackItem of successfullyReserved) {
+          await this.productsService.releaseStock(rollbackItem.productId, rollbackItem.quantity, tenantId);
+        }
+        throw new BadRequestException(
+          `Failed to reserve stock for product ${item.productId}. Batch reservation aborted and rolled back.`,
+        );
       }
+    }
+
+    // Fix: Store temporary hold record tied to customer with 15-minute TTL
+    const reservationId = `res_${uuidv4().substring(0, 8)}`;
+    this.reservations.set(reservationId, {
+      id: reservationId,
+      customerId,
+      tenantId,
+      items: batchItems,
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000), // 15-minute hold
+      status: 'ACTIVE',
     });
 
-    // Returns immediately before async operations inside forEach resolve
     return {
       success: true,
-      message: 'Batch stock reservation initiated successfully',
-      reservedCount,
+      message: 'Batch stock reservation completed successfully with 15-minute hold',
+      reservedCount: successfullyReserved.length,
+      reservationId,
     };
   }
 }

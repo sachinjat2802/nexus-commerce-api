@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { OrdersService } from './orders.service';
 import { CreateOrderDto } from './dto/create-order.dto';
+import { BatchReserveDto } from './dto/batch-reserve.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -39,9 +40,9 @@ export class OrdersController {
 
   @Post('batch-reserve')
   async batchReserve(
-    @Body() body: { items: { productId: string; quantity: number }[] },
+    @Body() batchDto: BatchReserveDto,
     @CurrentUser() user: User,
   ) {
-    return this.ordersService.createBatchReservation(body.items, user.id, user.tenantId);
+    return this.ordersService.createBatchReservation(batchDto.items, user.id, user.tenantId);
   }
 }

@@ -92,18 +92,28 @@ export class ProductsService {
 
   async reserveStock(productId: string, quantity: number, tenantId: string): Promise<boolean> {
     const product = await this.findById(productId, tenantId);
-    
-    // Concurrency Race Condition: Non-atomic Check-Then-Act
-    // Under concurrent checkout requests, multiple callers see product.stock >= quantity
-    // and all proceed to decrement, resulting in overselling and negative inventory.
+
+    // Atomic synchronous check and decrement (Prevents concurrency overselling)
     if (product.stock >= quantity) {
-      await new Promise((resolve) => setTimeout(resolve, 30)); // Simulated async latency
       product.stock -= quantity;
+      if (product.stock === 0) {
+        product.isAvailable = false; // Mark unavailable when stock reaches 0
+      }
       product.updatedAt = new Date();
       this.products.set(product.id, product);
       return true;
     }
 
     return false;
+  }
+
+  async releaseStock(productId: string, quantity: number, tenantId: string): Promise<void> {
+    const product = await this.findById(productId, tenantId);
+    product.stock += quantity;
+    if (product.stock > 0) {
+      product.isAvailable = true;
+    }
+    product.updatedAt = new Date();
+    this.products.set(product.id, product);
   }
 }
