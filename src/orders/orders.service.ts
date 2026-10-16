@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { Order, OrderStatus, OrderItem } from './entities/order.entity';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { ProductsService } from '../products/products.service';
@@ -77,14 +77,33 @@ export class OrdersService {
     status: 'ACTIVE' | 'RELEASED' | 'CONFIRMED';
   }> = new Map();
 
+  async cleanupExpiredReservations(tenantId: string): Promise<number> {
+    const now = new Date();
+    let cleaned = 0;
+    for (const [id, res] of this.reservations.entries()) {
+      if (res.tenantId === tenantId && res.status === 'ACTIVE' && res.expiresAt < now) {
+        res.status = 'RELEASED';
+        this.reservations.set(id, res);
+        for (const item of res.items) {
+          await this.productsService.releaseStock(item.productId, item.quantity, tenantId);
+        }
+        cleaned++;
+      }
+    }
+    return cleaned;
+  }
+
   async createBatchReservation(
     batchItems: { productId: string; quantity: number }[],
     customerId: string,
     tenantId: string,
   ): Promise<{ success: boolean; message: string; reservedCount: number; reservationId: string }> {
+    // 1. Evict any expired stock holds before new allocations
+    await this.cleanupExpiredReservations(tenantId);
+
     const successfullyReserved: { productId: string; quantity: number }[] = [];
 
-    // Fix: Sequential for..of loop that strictly awaits each reservation
+    // 2. Sequential for..of loop that strictly awaits each reservation
     // and provides automatic rollback if any stock reservation fails
     for (const item of batchItems) {
       const reserved = await this.productsService.reserveStock(item.productId, item.quantity, tenantId);
@@ -101,7 +120,7 @@ export class OrdersService {
       }
     }
 
-    // Fix: Store temporary hold record tied to customer with 15-minute TTL
+    // 3. Store temporary hold record tied to customer with 15-minute TTL
     const reservationId = `res_${uuidv4().substring(0, 8)}`;
     this.reservations.set(reservationId, {
       id: reservationId,
@@ -122,17 +141,22 @@ export class OrdersService {
 
   async releaseReservation(reservationId: string, tenantId: string): Promise<boolean> {
     const reservation = this.reservations.get(reservationId);
-    if (!reservation || reservation.tenantId !== tenantId || reservation.status !== 'ACTIVE') {
-      return false;
+    if (!reservation || reservation.tenantId !== tenantId) {
+      throw new NotFoundException(`Reservation ${reservationId} not found`);
     }
 
-    // Release and restore reserved stock
+    if (reservation.status !== 'ACTIVE') {
+      throw new ConflictException(`Reservation ${reservationId} is already ${reservation.status.toLowerCase()}`);
+    }
+
+    // Fix: Mark RELEASED before awaiting stock restoration to prevent concurrent double-releases
+    reservation.status = 'RELEASED';
+    this.reservations.set(reservationId, reservation);
+
     for (const item of reservation.items) {
       await this.productsService.releaseStock(item.productId, item.quantity, tenantId);
     }
 
-    reservation.status = 'RELEASED';
-    this.reservations.set(reservationId, reservation);
     return true;
   }
 }
