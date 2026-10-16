@@ -78,34 +78,43 @@ export class OrdersService {
       throw new BadRequestException('Only completed or processing orders can be refunded');
     }
 
-    // 3. Ensure positive refund amount
-    if (refundDto.amount <= 0) {
+    // 3. Compute in integer cents and validate max 2 decimals to avoid float precision drift
+    const totalCents = Math.round(order.totalAmount * 100);
+    const currentRefundedCents = Math.round((order.refundedAmount || 0) * 100);
+    const refundCents = Math.round(refundDto.amount * 100);
+
+    if (refundCents <= 0) {
       throw new BadRequestException('Refund amount must be greater than zero');
     }
 
-    // 4. Track cumulative refunded amount (Fixes partial refund lockout)
-    const currentRefunded = order.refundedAmount || 0;
-    if (currentRefunded + refundDto.amount > order.totalAmount) {
+    if (Math.abs(refundDto.amount * 100 - refundCents) > 1e-4) {
+      throw new BadRequestException('Refund amount cannot have more than 2 decimal places');
+    }
+
+    // 4. Track cumulative refunded amount in integer cents (Fixes float cents breaking refund cap)
+    if (currentRefundedCents + refundCents > totalCents) {
+      const remainingCents = totalCents - currentRefundedCents;
       throw new BadRequestException(
-        `Refund amount exceeds remaining refundable balance of ${order.totalAmount - currentRefunded}`,
+        `Refund amount exceeds remaining refundable balance of ${(remainingCents / 100).toFixed(2)}`,
       );
     }
 
-    order.refundedAmount = currentRefunded + refundDto.amount;
-    if (order.refundedAmount >= order.totalAmount) {
+    const newRefundedCents = currentRefundedCents + refundCents;
+    order.refundedAmount = Number((newRefundedCents / 100).toFixed(2));
+    if (newRefundedCents >= totalCents) {
       order.status = OrderStatus.REFUNDED;
     }
 
-    // Record audit entry preserving reason, notes, timestamp and operator
+    // Record audit entry preserving reason, notes, timestamp and operator id (Fixes using user.id)
     if (!order.refunds) {
       order.refunds = [];
     }
     order.refunds.push({
       id: `ref_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-      amount: refundDto.amount,
+      amount: Number((refundCents / 100).toFixed(2)),
       reason: refundDto.reason,
       notes: refundDto.notes,
-      processedBy: user.userId || user.sub || user.email || 'system',
+      processedBy: user.id || 'system',
       processedAt: new Date(),
     });
 
@@ -113,5 +122,14 @@ export class OrdersService {
     this.orders.set(order.id, order);
 
     return order;
+  }
+
+  sanitizeForUser(order: Order, user: any): Order {
+    if (user?.role === 'ADMIN') {
+      return order;
+    }
+    // Customers only see order state; strip internal staff audit notes and staff identity
+    const { refunds, ...safeOrder } = order;
+    return safeOrder as Order;
   }
 }
