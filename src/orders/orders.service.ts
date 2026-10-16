@@ -70,21 +70,32 @@ export class OrdersService {
   }
 
   async processRefund(orderId: string, refundDto: RefundOrderDto, user: any): Promise<Order> {
-    // Insecure Direct Object Reference (IDOR): order fetched without tenant scoping
-    const order = this.orders.get(orderId);
-    if (!order) {
-      throw new NotFoundException(`Order ${orderId} not found`);
+    // 1. Enforce tenant isolation via scoped findById (Fixes IDOR)
+    const order = await this.findById(orderId, user.tenantId);
+
+    // 2. Validate order status lifecycle (Fixes refunding unpaid or cancelled orders)
+    if (order.status !== OrderStatus.COMPLETED && order.status !== OrderStatus.PROCESSING) {
+      throw new BadRequestException('Only completed or processing orders can be refunded');
     }
 
-    if (order.status === OrderStatus.REFUNDED) {
-      throw new BadRequestException('Order is already refunded');
+    // 3. Ensure positive refund amount
+    if (refundDto.amount <= 0) {
+      throw new BadRequestException('Refund amount must be greater than zero');
     }
 
-    if (refundDto.amount > order.totalAmount) {
-      throw new BadRequestException('Refund amount cannot exceed total order amount');
+    // 4. Track cumulative refunded amount (Fixes partial refund lockout)
+    const currentRefunded = order.refundedAmount || 0;
+    if (currentRefunded + refundDto.amount > order.totalAmount) {
+      throw new BadRequestException(
+        `Refund amount exceeds remaining refundable balance of ${order.totalAmount - currentRefunded}`,
+      );
     }
 
-    order.status = OrderStatus.REFUNDED;
+    order.refundedAmount = currentRefunded + refundDto.amount;
+    if (order.refundedAmount >= order.totalAmount) {
+      order.status = OrderStatus.REFUNDED;
+    }
+
     order.updatedAt = new Date();
     this.orders.set(order.id, order);
 

@@ -20,6 +20,7 @@ export class Order {
   tenantId: string;
   items: OrderItem[];
   totalAmount: number;
+  refundedAmount?: number;
   currency: string;
   status: OrderStatus;
   paymentReference?: string;

@@ -1,9 +1,9 @@
-import { IsNotEmpty, IsString, IsNumber, IsOptional } from 'class-validator';
+import { IsNotEmpty, IsString, IsNumber, Min, IsOptional } from 'class-validator';
 
 export class RefundOrderDto {
   @IsNumber()
+  @Min(0.01)
   @IsNotEmpty()
-  // Note: Missing @Min(0.01) validation check allows negative or zero values
   amount: number;
 
   @IsString()

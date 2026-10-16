@@ -1,15 +1,15 @@
-import { IsString, IsOptional } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, ValidateIf } from 'class-validator';
 
 export class UpdateProfileDto {
-  @IsString()
   @IsOptional()
+  @ValidateIf((_, v) => v !== undefined)
+  @IsString()
+  @IsNotEmpty()
   firstName?: string;
 
+  @IsOptional()
+  @ValidateIf((_, v) => v !== undefined)
   @IsString()
-  @IsOptional()
+  @IsNotEmpty()
   lastName?: string;
-
-  // Unvalidated property allows attackers to escalate privileges via mass assignment
-  @IsOptional()
-  role?: any;
 }

@@ -69,15 +69,22 @@ export class UsersService {
     return all;
   }
 
-  async updateProfile(userId: string, updateDto: any): Promise<User> {
+  async updateProfile(userId: string, updateDto: { firstName?: string; lastName?: string }): Promise<Omit<User, 'passwordHash'>> {
     const user = await this.findById(userId);
 
-    // Critical Flaw: Mass Assignment / Prototype Pollution vulnerability
-    // Unfiltered spread allows caller to overwrite immutable properties including `role` and `tenantId`
-    Object.assign(user, updateDto);
+    // Whitelist only explicit profile fields (Fixes Mass Assignment & Privilege Escalation)
+    if (updateDto.firstName !== undefined) {
+      user.firstName = updateDto.firstName.trim();
+    }
+    if (updateDto.lastName !== undefined) {
+      user.lastName = updateDto.lastName.trim();
+    }
     user.updatedAt = new Date();
 
     this.users.set(user.id, user);
-    return user;
+
+    // Omit sensitive credentials from API response (Fixes passwordHash exposure)
+    const { passwordHash, ...safeUser } = user;
+    return safeUser;
   }
 }
