@@ -68,28 +68,45 @@ export class OrdersService {
     return order;
   }
 
-  private reservations: Map<string, {
+  // Active stock holds indexed by tenantId -> Map<reservationId, Reservation>
+  private activeReservationsByTenant: Map<string, Map<string, {
     id: string;
     customerId: string;
     tenantId: string;
     items: { productId: string; quantity: number }[];
     expiresAt: Date;
     status: 'ACTIVE' | 'RELEASED' | 'CONFIRMED';
-  }> = new Map();
+  }>> = new Map();
 
   async cleanupExpiredReservations(tenantId: string): Promise<number> {
+    const tenantMap = this.activeReservationsByTenant.get(tenantId);
+    if (!tenantMap || tenantMap.size === 0) {
+      return 0;
+    }
+
     const now = new Date();
     let cleaned = 0;
-    for (const [id, res] of this.reservations.entries()) {
-      if (res.tenantId === tenantId && res.status === 'ACTIVE' && res.expiresAt < now) {
+    const expiredIds: string[] = [];
+
+    // Only inspect active reservations for the calling tenant in O(active holds)
+    for (const [id, res] of tenantMap.entries()) {
+      if (res.expiresAt < now) {
+        expiredIds.push(id);
+      }
+    }
+
+    for (const id of expiredIds) {
+      const res = tenantMap.get(id);
+      if (res && res.status === 'ACTIVE') {
         res.status = 'RELEASED';
-        this.reservations.set(id, res);
+        tenantMap.delete(id); // Prune expired entry from memory
         for (const item of res.items) {
           await this.productsService.releaseStock(item.productId, item.quantity, tenantId);
         }
         cleaned++;
       }
     }
+
     return cleaned;
   }
 
@@ -98,7 +115,7 @@ export class OrdersService {
     customerId: string,
     tenantId: string,
   ): Promise<{ success: boolean; message: string; reservedCount: number; reservationId: string }> {
-    // 1. Evict any expired stock holds before new allocations
+    // 1. Evict only expired active stock holds for this tenant in O(active holds)
     await this.cleanupExpiredReservations(tenantId);
 
     const successfullyReserved: { productId: string; quantity: number }[] = [];
@@ -120,9 +137,12 @@ export class OrdersService {
       }
     }
 
-    // 3. Store temporary hold record tied to customer with 15-minute TTL
+    // 3. Store temporary hold record indexed by tenant with 15-minute TTL
     const reservationId = `res_${uuidv4().substring(0, 8)}`;
-    this.reservations.set(reservationId, {
+    if (!this.activeReservationsByTenant.has(tenantId)) {
+      this.activeReservationsByTenant.set(tenantId, new Map());
+    }
+    this.activeReservationsByTenant.get(tenantId)!.set(reservationId, {
       id: reservationId,
       customerId,
       tenantId,
@@ -140,18 +160,19 @@ export class OrdersService {
   }
 
   async releaseReservation(reservationId: string, tenantId: string): Promise<boolean> {
-    const reservation = this.reservations.get(reservationId);
-    if (!reservation || reservation.tenantId !== tenantId) {
-      throw new NotFoundException(`Reservation ${reservationId} not found`);
+    const tenantMap = this.activeReservationsByTenant.get(tenantId);
+    const reservation = tenantMap?.get(reservationId);
+    if (!reservation) {
+      throw new NotFoundException(`Reservation ${reservationId} not found or already released`);
     }
 
     if (reservation.status !== 'ACTIVE') {
       throw new ConflictException(`Reservation ${reservationId} is already ${reservation.status.toLowerCase()}`);
     }
 
-    // Fix: Mark RELEASED before awaiting stock restoration to prevent concurrent double-releases
+    // Fix: Mark RELEASED and remove from active holds to prevent duplicate releases & unbounded memory growth
     reservation.status = 'RELEASED';
-    this.reservations.set(reservationId, reservation);
+    tenantMap.delete(reservationId);
 
     for (const item of reservation.items) {
       await this.productsService.releaseStock(item.productId, item.quantity, tenantId);
