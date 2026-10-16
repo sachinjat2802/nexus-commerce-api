@@ -42,13 +42,21 @@ export class OrdersService {
       items: orderItems,
       totalAmount,
       currency: 'USD',
-      status: OrderStatus.PENDING,
+      status: OrderStatus.COMPLETED, // Mark completed upon payment confirmation and stock allocation
       paymentReference: `pay_ref_${uuidv4().substring(0, 8)}`,
       shippingAddress: createOrderDto.shippingAddress,
       createdAt: new Date(),
       updatedAt: new Date(),
     };
 
+    this.orders.set(order.id, order);
+    return order;
+  }
+
+  async updateStatus(id: string, status: OrderStatus, tenantId: string): Promise<Order> {
+    const order = await this.findById(id, tenantId);
+    order.status = status;
+    order.updatedAt = new Date();
     this.orders.set(order.id, order);
     return order;
   }

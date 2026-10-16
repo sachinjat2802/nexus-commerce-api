@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Patch,
   Body,
   Param,
   UseGuards,
@@ -10,6 +11,7 @@ import {
 import { OrdersService } from './orders.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { RefundOrderDto } from './dto/refund-order.dto';
+import { OrderStatus } from './entities/order.entity';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -53,5 +55,15 @@ export class OrdersController {
     @CurrentUser() user: User,
   ) {
     return this.ordersService.processRefund(id, refundDto, user);
+  }
+
+  @Patch(':id/status')
+  @Roles(Role.ADMIN)
+  async updateStatus(
+    @Param('id') id: string,
+    @Body('status') status: OrderStatus,
+    @CurrentUser() user: User,
+  ) {
+    return this.ordersService.updateStatus(id, status, user.tenantId);
   }
 }
